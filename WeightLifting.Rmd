@@ -1,0 +1,160 @@
+Weight Lifting Exercise Data Analysis and Modeling
+==================================================
+
+Introduction
+------------
+
+Devices such as *Fitbit*, pedometers, and smart phones can track our daily activity, and help us make better decisions regarding our actions. To evaluate how well people may perform an activity, a group of 6 participants were asked to perform weight lifting in both correct and incorrect manners. Sensors were attached to each participant's arm, forearm, belt, and the dumbbell to collect movement data. For details on this data set, see http://groupware.les.inf.puc-rio.br/har.
+
+The goal of this project is to use a machine learning algorithm to build a model predicting the manner in which the participants performed the weight lifting from the movement data gathered by the sensors.
+
+Methods
+-------
+
+```{r setup, include=FALSE}
+opts_chunk$set(cache=TRUE)
+``` 
+
+### Loading Libraries 
+
+```{r loadLibrary, message=F, warning=F}
+library(caret)
+library(randomForest)
+```
+
+### Loading Data
+
+```{r loadData}
+data = read.csv("../data/pml-training.csv")
+dim(data)
+```
+
+### Data Set Partition 
+
+The weight lifting exercise data were randomly split into a training data set (containing 75% of the data) and a testing data set (containing 25% of the data). To ensure unbiased assessment, all the exploratory analysis and predictive modeling used only the training data set. The testing data set was used only once as the final evaluation of the predictive model built from the training data set.
+
+```{r dataPartition, dependson="loadData"}
+set.seed(201406)
+inTrain = createDataPartition(data$classe, p=3/4)[[1]]
+training = data[inTrain,]
+testing = data[-inTrain,]
+dim(training)
+dim(testing)
+```
+
+### Exploratory Analysis
+
+First, take a look at the raw data. Note that the output on the raw data is lengthy and hence is set to hidden to not clutter this report.
+
+```{r rawdata, dependson="loadData", results="hide"}
+head(training)
+summary(training)
+```
+
+#### Data Conversion
+
+The raw data contain both empty values and missing values (i.e., NA). To be consistent, the empty values were converted into missing values.
+
+```{r dataConversion, dependson="loadData"}
+training[training == ""] = NA
+```
+
+#### Feature Selection
+
+Many columns in the training data set contain a large amount of missing values. These columns were removed from further analysis.
+
+```{r removeNA, dependson="loadData"}
+training = training[, colSums(is.na(training)) == 0]
+sum(is.na(training))
+```
+
+The first column in the data set is simply a row ID. The second column is the participant name. The next three columns store the time stamps associated with the movement data collected. These columns should not affect the response variable (i.e., *classe*).
+
+The sixth and seventh columns are named *new_window* and *num_window*. It's not clear from their names whether these two variables may affect the response variable. To explore potential relationship, a contingency table between *new_window* and *classe*, and a density plot for *num_window* colored by *classe* are created:
+
+```{r explore, dependson="loadData"}
+table(training$new_window, training$classe)
+qplot(num_window, colour=classe, data=training, geom="density")
+```
+
+Based on the above contingency table and density plot, it does not appear that *new_window* and *num_window* may affect *classe*. Hence the first seven variables in the training data set were removed from further analysis.
+
+```{r removeMore, dependson="loadData"}
+training = training[, -c(1:7)]
+```
+
+Below are the remaining features to be used for building the model to predict activity quality (i.e., *classe*):
+
+```{r selectedFeatures, dependson="loadData"}
+summary(training)
+sapply(training[1,],class)
+```
+
+### Statistical Modeling
+
+A random forest classifier was built to predict the activity quality performed by a participant using 52 quantitative movement measurements collected from the sensors. A random forest classifier is a combination of many decision trees, and predicts an outcome based on the majority votes from the individual trees. When building an individual tree, a subset of all input variables is randomly sampled as candidates to determine the decision at the tree node. In this analysis, to avoid model over-fitting, cross-validation was performed to determine the optimal number of variables to use at each node when building individual trees. This number was then specified for building the final random forest model. The final model was evaluated by the classification error rate on the testing data set.
+
+
+Results
+-------
+
+### Cross-Validation for Determining Number of Variables to Use at Each Decision Tree Node
+
+A 5-fold cross-validation was performed on the training data set to determine the optimal number of predictor variables to be used to determine the decision at a node of an individual tree. The result is shown in the figure below. As the number of variables used to make decision at a tree node increased, the cross-validation error decreased sharply up to 13 variables (indicated by the red vertical line in the figure). Thereafter, increasing the number of variables had little effect on the cross-validation error. Hence, 13 was chosen as the optimal number of predictor variables to be sampled for making decision at each tree node.
+
+```{r rfcv, dependson="loadData"}
+set.seed(7772)
+trainx = training[, -53]
+trainy = training[, 53]
+rfcvResult = rfcv(trainx, trainy)
+with(rfcvResult, plot(n.var, error.cv, 
+                      xlab="Number of Variables", 
+                      ylab="Cross-Validation Error", 
+                      type="o", lwd=2))
+abline(v=13, lwd=3, col="red")
+```
+
+### Building a Random Forest Model
+
+Next, a random forest classifier was built with the 52 quantitative movement measurements as the predictor variables and the activity quality as the response variable using the training data set. The number of variables randomly sampled as candidates at each tree node was limited to 13. Five hundred trees were built. Below is the R output for the random forest classifier result:
+
+```{r buldModel, dependson="loadData"}
+set.seed(7772)
+rfResult = randomForest(classe ~ ., data=training, mtry=13, importance=TRUE, prox=TRUE)
+rfResult
+```
+
+This random forest classifier had an out-of-bag (OOB) classification error rate of 0.44% on the training data set.
+
+### Variable Importance
+
+To gain some insight on what quantitative movement measurements were used in the random forest classifier, the 13 features with the highest variable importance as measured by the mean decrease in the Gini index are shown in the figure below. A variable with a higher mean decrease in the Gini index is more important for the random forest classifier.
+
+```{r varImportance, dependson="loadData"}
+varImpPlot(rfResult, n.var=13, type=2, main="Variable Importance Measurements for Top 13 Features")
+```
+
+### Prediction for Testing Data Set
+
+Finally, the random forest classifier was applied to the testing data set to predict the activity quality performed by a participant. Below is the resulting confusion matrix and the overall classification error rate:
+
+```{r prediction, dependson="loadData", warning=F}
+testing = testing[, colnames(training)]
+testx = testing[, -53]
+pred <- predict(rfResult, testx)
+confusionMatrix(pred, testing$classe)
+errorRate <- sum(pred != testing$classe)/length(testing$classe)
+errorRate
+```
+
+The overall classification error rate across all five activity quality categories on the testing data set was 0.43%, which suggests that the random forest classifier is quite accurate at predicting the manner in which a participant performed weight lifting based on the quantitative movement measurements captured by the sensors.
+
+Conclusions
+-----------
+
+This analysis built a random forest classifier capable of predicting activity quality using quantitative measures from sensors with high accuracy. This analysis is based on a limited sample from 6 participants performing weight lifting in correct and incorrect manners. A sample with more participants performing a wider range of activities would be more appropriate to build a highly accurate predictive model for human activity quality using quantitative measures gathered from sensors.
+
+References
+----------
+
+Velloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
